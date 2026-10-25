@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AM/NS India - Shop Floor Interaction (SFI) Form</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script>
+tailwind.config={theme:{extend:{colors:{amns:{red:'#E31B23',darkred:'#B81218'}},fontFamily:{sans:['Inter','sans-serif']}}}}
+</script>
+<style>
+@keyframes up{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+main>div{animation:up .22s ease-out}
+.custom-shadow{box-shadow:0 10px 25px -5px rgba(227,27,35,.05),0 8px 10px -6px rgba(0,0,0,.03)}
+.err{border-color:#E31B23!important;background:#FEF2F2}
+</style>
+</head>
+<body class="bg-slate-50 font-sans text-gray-800 antialiased min-h-screen flex flex-col">
+<header class="bg-white border-b-2 border-amns-red sticky top-0 z-40 shadow-sm">
+  <div class="max-w-5xl mx-auto px-4 h-20 flex items-center space-x-4">
+    <div class="flex flex-col bg-amns-red text-white font-black px-3.5 py-1.5 rounded-lg tracking-tighter leading-none text-xl sm:text-2xl shadow-sm">
+      <span>AM/NS</span><span class="text-[10px] tracking-widest uppercase font-extrabold text-red-100 mt-0.5">INDIA</span>
+    </div>
+    <div class="h-10 w-px bg-slate-200 hidden sm:block"></div>
+    <div>
+      <h1 class="text-base sm:text-xl font-black text-slate-900 leading-tight uppercase tracking-tight">SFI - Shop Floor Interaction</h1>
+      <p id="subtitle" class="text-xs text-slate-500 font-semibold">Safety Register · Submit Form</p>
+    </div>
+  </div>
+</header>
+
+<main class="flex-grow max-w-5xl w-full mx-auto px-4 py-6"><div id="app"></div></main>
+
+<div id="camModal" class="fixed inset-0 bg-black/90 z-50 hidden flex-col items-center justify-center gap-3 p-3">
+  <video id="camVideo" autoplay playsinline muted class="max-w-full rounded-xl" style="max-height:70vh"></video>
+  <div id="camInfo" class="text-white text-sm font-bold"></div>
+  <div class="flex gap-3">
+    <button type="button" onclick="snap()" class="px-6 py-3 bg-amns-red text-white font-black rounded-xl">📸 Capture</button>
+    <button type="button" onclick="closeCam()" class="px-6 py-3 bg-slate-700 text-white font-black rounded-xl">Done</button>
+  </div>
+</div>
+
+<script>
+/* ================= CONFIG ================= */
+const CREATE_URL = 'https://default37cd273a1cec4aaea29741480ea54f.8d.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/17/workflows/0848e54d5e5a49d6b0cd4a7a91c113b4/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=WXlgQPD44u7vlH8gopHPfz2aOchLnfF4mJzUy9-M5mM';  // Flow 1: new SFI -> Excel row + mail + PDF
+const CLOSE_URL  = 'https://default37cd273a1cec4aaea29741480ea54f.8d.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/05/workflows/3322546673df4ecbb30ffe61a5453adf/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=hjC6k_AyuwFNdBjm-5Z4kA4keJd-JelfYl9Byq1RO5g';   // Flow 2: closure  -> Excel update + mail + PDF
+const PAGE_URL   = '';        // blank = auto-use this page's own URL in the closure link
+const ALLOW_GALLERY = false;  // false = live camera only
+
+const PLANTS=["CGL-1","CGL-2"];
+const SHIFTS=["A (Morning)","B (Evening)","C (Night)","G (General)"];
+const TRADES=["CGL1 Production","CGL2 Production","CGL1 Mechanical","CGL2 Mechanical","CGL1 Electrical","CGL2 Electrical","Quality","Civil","Utility","Logistics"];
+const DEPTS=["CGL1 Production","CGL2 Production","CGL1 Mechanical","CGL2 Mechanical","CGL1 Electrical","CGL2 Electrical","Utility","Safety","Logistics","Civil"];
+const CATS=["Line of Fire (POP)","Housekeeping","PPE Compliance","Working at Height","Electrical Safety","Confined Space","Material Handling","Guarding & Isolation","Hand Tools","Chemical Safety"];
+const SEVS=["Low","Medium","High","Critical"];
+const RULES=["I work in a “fit and able” condition","I use fall prevention or protection when the risk of falling is beyond 1.8 m","I follow the isolation procedure","I follow the confined space procedure","I respect all the rules of load handling and never stand under a suspended load","I respect all the traffic and driving rules","I protect myself against falling from height","I respect rail priority and stay out of close clearance areas","I respect the rules for entering and working in hazardous gas areas","I never disable safety devices"];
+
+/* ================= HELPERS ================= */
+const $=id=>document.getElementById(id);
+const val=id=>($(id)?.value||'').trim();
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const today=()=>{const d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10)};
+const INP='w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-amns-red focus:border-amns-red';
+const F=(label,inner,cls='')=>`<div class="${cls}"><label class="block text-xs font-bold text-slate-700 mb-1">${label} <span class="text-amns-red">*</span></label>${inner}</div>`;
+const I=(id,type='text',ph='',x='')=>`<input id="${id}" type="${type}" placeholder="${ph}" ${x} class="${INP}">`;
+const S=(id,arr,first)=>`<select id="${id}" class="${INP}"><option value="">${first}</option>${arr.map(x=>`<option>${esc(x)}</option>`).join('')}</select>`;
+const T=(id,rows,ph)=>`<textarea id="${id}" rows="${rows}" placeholder="${ph}" class="w-full p-3 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-amns-red"></textarea>`;
+const H=(icon,t)=>`<h3 class="text-sm font-extrabold text-amns-red uppercase tracking-wider border-b border-slate-200 pb-2 flex items-center"><i class="fa-solid ${icon} mr-2"></i> ${t}</h3>`;
+const count=(id,label,v,c)=>`<div class="bg-${c}-50 p-2.5 rounded-lg border border-${c}-200"><label class="block text-[11px] font-bold text-${c}-800 uppercase">${label}</label><input type="number" id="${id}" min="0" value="${v}" class="w-full mt-1 px-2 py-1 text-sm font-bold rounded border border-${c}-300 bg-white"></div>`;
+
+/* ===== HOD / MAIL RECIPIENTS (edit here when a HOD changes) ===== */
+const HODS=[
+ {k:"Production",n:"Dattu Labade",e:"dattu.labade@amns.in"},
+ {k:"Mechanical",n:"Sunil Tripathi",e:"sunil.tripathi@amns.in"},
+ {k:"Electrical",n:"Rajendra Darole",e:"rajendra.darole@amns.in"},
+ {k:"Utility",n:"Shivaji Khamkar",e:"shivaji.khamkar@amns.in"},
+ {k:"Logistics",n:"Pankaj Patil",e:"pankaj.patil@amns.in"},
+ {k:"Civil",n:"Madhusudhan Rai",e:"madhusudhan.rai@amns.in"},
+ {k:"Safety",n:"Michael Peter",e:"michael.peter@amns.in"}];
+const COMMON_CC=["rahul.kumawat@amns.in","pankaj.deore@amns.in","dattu.labade@amns.in","chetan.lavhale@amns.in"]; // CC on every mail
+const mlist=a=>{const q=new Set();return a.map(x=>(x||'').trim()).filter(x=>x.includes('@')&&!q.has(x.toLowerCase())&&q.add(x.toLowerCase()))};
+const ccOf=(to,extra)=>{const t=new Set(mlist(to).map(x=>x.toLowerCase()));return mlist([...extra,...COMMON_CC]).filter(x=>!t.has(x.toLowerCase())).join(';')};
+const HODSEL=new Set();let _autoHod=null;
+function hodWidget(){return `<div class="relative"><input type="hidden" id="assigneeEmail">
+<button type="button" id="hodBtn" onclick="hodToggle()" class="${INP} text-left flex justify-between items-center bg-white"><span id="hodTxt" class="truncate text-slate-500">Select HOD(s)</span><i class="fa-solid fa-chevron-down text-xs text-slate-400 ml-2"></i></button>
+<div id="hodPanel" class="hidden absolute z-30 mt-1 w-full bg-white border border-slate-300 rounded-lg shadow-lg max-h-64 overflow-auto">${HODS.map((h,i)=>`<label class="flex items-start gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer text-sm"><input type="checkbox" class="mt-1 w-4 h-4" data-i="${i}" onchange="hodPick(this)"><span><b>${h.n}</b> — ${h.k} HOD<br><span class="text-[11px] text-slate-500">${h.e}</span></span></label>`).join('')}</div>
+<p class="text-[11px] text-slate-500 mt-1">Tick one or more. Common recipients are added in CC automatically.</p></div>`}
+function hodSync(){const a=HODS.filter((h,i)=>HODSEL.has(i));$('assigneeEmail').value=a.map(h=>h.e).join(';');$('hodTxt').textContent=a.length?a.map(h=>h.n).join(', '):'Select HOD(s)';$('hodTxt').className='truncate '+(a.length?'text-slate-900':'text-slate-500');document.querySelectorAll('#hodPanel input').forEach(c=>c.checked=HODSEL.has(+c.dataset.i));$('hodBtn').classList.remove('err')}
+function hodPick(c){c.checked?HODSEL.add(+c.dataset.i):HODSEL.delete(+c.dataset.i);hodSync()}
+function hodToggle(){$('hodPanel').classList.toggle('hidden')}
+function hodAuto(){const d=val('dept'),i=HODS.findIndex(h=>d.includes(h.k));if(_autoHod!==null)HODSEL.delete(_autoHod);_autoHod=i>=0?i:null;if(i>=0)HODSEL.add(i);hodSync()}
+function initHod(){HODSEL.clear();_autoHod=null;$('dept').addEventListener('change',hodAuto);document.addEventListener('click',e=>{if(!e.target.closest('#hodBtn,#hodPanel'))$('hodPanel')?.classList.add('hidden')})}
+
+const photos={before:[],after:[],close:[]};
+
+/* ================= PHOTOS ================= */
+function resize(src,max=800){return new Promise(r=>{const i=new Image();i.onload=()=>{let w=i.width,h=i.height;if(w>h&&w>max){h*=max/w;w=max}else if(h>max){w*=max/h;h=max}const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(i,0,0,w,h);r(c.toDataURL('image/jpeg',.6))};i.onerror=()=>r(null);i.src=src})}
+const readFile=f=>new Promise(r=>{const fr=new FileReader();fr.onload=e=>r(e.target.result);fr.readAsDataURL(f)});
+async function addFiles(k,inp){for(const f of inp.files){if(photos[k].length>=10)break;const d=await resize(await readFile(f));if(d)photos[k].push(d)}inp.value='';draw(k)}
+function draw(k){$('pv_'+k).innerHTML=photos[k].map((d,i)=>`<div class="relative w-16 h-16 rounded-lg overflow-hidden border border-slate-300"><img src="${d}" class="w-full h-full object-cover"><button type="button" onclick="photos['${k}'].splice(${i},1);draw('${k}')" class="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-amns-red text-white text-[10px]">✕</button></div>`).join('');$('cnt_'+k).textContent=photos[k].length+' / 10'}
+function photoBox(k,label,color='amns-red'){return `<div><label class="block text-xs font-bold text-slate-700 mb-1">${label}</label>
+ <div class="p-4 border-2 border-dashed border-slate-300 rounded-xl bg-slate-50/50">
+  <div class="flex flex-wrap items-center gap-2">
+   <button type="button" onclick="openCam('${k}')" class="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-lg"><i class="fa-solid fa-camera mr-1.5"></i> Live Capture</button>
+   ${ALLOW_GALLERY?`<label class="px-4 py-2 bg-slate-700 text-white text-xs font-bold rounded-lg cursor-pointer"><i class="fa-solid fa-image mr-1.5"></i> Gallery<input type="file" accept="image/*" multiple class="hidden" onchange="addFiles('${k}',this)"></label>`:''}
+   <span id="cnt_${k}" class="text-xs text-slate-500 font-semibold">0 / 10</span></div>
+  <div id="pv_${k}" class="flex flex-wrap gap-2 mt-2"></div></div></div>`}
+let stream=null,camKey=null;
+async function openCam(k){
+ if(photos[k].length>=10)return alert('Maximum 10 photos.');
+ if(!navigator.mediaDevices?.getUserMedia)return alert('Live camera not available (HTTPS + camera permission required).');
+ try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});camKey=k;$('camVideo').srcObject=stream;$('camModal').classList.replace('hidden','flex');$('camInfo').textContent=`Captured: ${photos[k].length} / 10`}
+ catch(e){alert('Camera access denied or unavailable.')}}
+async function snap(){const v=$('camVideo');if(!v.videoWidth)return;if(photos[camKey].length>=10)return alert('Maximum 10 photos.');
+ const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
+ const d=await resize(c.toDataURL('image/jpeg',.9));if(d){photos[camKey].push(d);draw(camKey);$('camInfo').textContent=`Captured: ${photos[camKey].length} / 10`}}
+function closeCam(){stream?.getTracks().forEach(t=>t.stop());stream=null;$('camModal').classList.replace('flex','hidden')}
+
+/* ================= MAIL + PDF ================= */
+const sevColor=s=>s==='Low'?'#10B981':s==='Medium'?'#E0533D':'#B91C1C';
+const tbl=rows=>`<table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">`+rows.map(([l,v,raw])=>`<tr><td style="width:38%;padding:10px 12px;background:#F1F5F9;font-weight:bold;text-transform:uppercase;font-size:11px;border-bottom:1px solid #E2E8F0;vertical-align:top">${esc(l)}</td><td style="padding:10px 12px;border-bottom:1px solid #E2E8F0">${raw??esc(v)}</td></tr>`).join('')+`</table>`;
+const coreRows=d=>[['Reference ID',d.ref],['Submitter Name',`${d.submitter} (${d.submitterEmail})`],['Assigned To (Responder Email)',(d.assigneeEmail||'-').split(';').join('; ')],['Plant',`${d.plant} · ${d.location}`],['Compliance Department',d.dept],['Interacted On (Date)',d.date],['SFI Category',d.category],['Severity Level',d.severity,`<b style="color:${sevColor(d.severity)}">${esc(d.severity)}</b>`],['SFI Description',d.description],['Applicable Golden Rule',d.goldenRule],['Corrective Action To Be Performed',d.requiredAction],['Target Closure Date',d.targetDate]];
+const link=(tok,t)=>`<a href="${tok}" style="color:#0078D4;font-weight:bold;text-decoration:none">${t}</a><br><span style="font-size:11px;color:#64748B">Opens the file in Drive/SharePoint (access required).</span>`;
+const mrow=([l,v,raw])=>`<tr><td width="36%" style="width:36%;padding:10px 14px;background:#F1F5F9;font-weight:700;text-transform:uppercase;font-size:11px;letter-spacing:.4px;color:#334155;border-bottom:1px solid #E2E8F0;vertical-align:top">${esc(l)}</td><td style="padding:10px 14px;font-size:13px;color:#1E293B;border-bottom:1px solid #E2E8F0;vertical-align:top">${raw??esc(v)}</td></tr>`;
+const msec=(t,rows,c)=>`<tr><td style="padding:18px 20px 0"><div style="font-size:12px;font-weight:800;color:${c};text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #E2E8F0;padding-bottom:8px">${t}</div></td></tr><tr><td style="padding:10px 20px 6px"><table width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:1px solid #E2E8F0">${rows.map(mrow).join('')}</table></td></tr>`;
+function mailHtml(d,closed){
+ const RED='#E31B23',GRN='#059669',acc=closed?GRN:RED,F="font-family:Inter,Arial,Helvetica,sans-serif";
+ const det=coreRows(d);
+ if(d.hasBefore)det.push(['Condition Before Corrective Action','',link('__BEFORE_LINK__','View Before Photo')]);
+ if(!closed&&d.closeLink)det.push(['Closure Form Link','',`<a href="${esc(d.closeLink)}" style="color:#E31B23;font-weight:800;text-decoration:underline">Open Closure Form</a><br><span style="font-size:11px;color:#64748B">Use this link to enter the action taken and upload the after photo.</span>`]);
+ const clo=[];
+ if(closed){clo.push(['Status','','<b style="color:'+GRN+'">CLOSED</b>'],['Action Taken',d.actionTaken],['Action Taken By',d.actionTakenBy],['Closed By (Mail ID)',d.closedByEmail||'-'],['Closed On (Date)',d.closedDate]);
+  if(d.remarks)clo.push(['Remark',d.remarks]);
+  if(d.hasAfter)clo.push(['Condition After Corrective Action','',link('__AFTER_LINK__','View After Photo')])}
+ const al=closed?'<b>Closed:</b> Corrective action for this SFI has been completed and the SFI is now closed.':'<b>Alert:</b> An SFI has been raised and corrective action has <b>NOT</b> been taken yet.';
+ const cta=closed?'':`<tr><td style="padding:14px 20px 6px"><table width="100%" cellpadding="0" cellspacing="0" style="width:100%;background:#F8FAFC;border:1px solid #E2E8F0"><tr><td align="center" style="padding:20px"><div style="font-size:16px;font-weight:800;color:#0F172A;margin-bottom:6px">To close this SFI, please click here</div><div style="font-size:12px;color:#64748B;margin-bottom:14px">Submit the action taken and the after photo using the button below.</div><table cellpadding="0" cellspacing="0" align="center"><tr><td bgcolor="${RED}" style="background:${RED};border-radius:8px"><a href="${esc(d.closeLink)}" style="display:inline-block;padding:13px 26px;color:#FFFFFF;font-size:14px;font-weight:800;text-decoration:none;${F}">✔&nbsp; Click here to Close this SFI</a></td></tr></table><div style="font-size:11px;color:#64748B;margin-top:14px">Button not working? <a href="${esc(d.closeLink)}" style="color:#E31B23;font-weight:700">Open the closure form here</a></div></td></tr></table></td></tr>`;
+ return `<table width="100%" cellpadding="0" cellspacing="0" style="width:100%;background:#F8FAFC;${F}"><tr><td align="center" style="padding:18px 8px">
+<table width="640" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;background:#FFFFFF;border:1px solid #E2E8F0;${F}">
+<tr><td style="padding:16px 20px;border-bottom:3px solid ${RED}"><table cellpadding="0" cellspacing="0"><tr>
+ <td bgcolor="${RED}" style="background:${RED};border-radius:8px;padding:8px 13px;color:#FFFFFF;font-weight:900;font-size:21px;line-height:1;letter-spacing:-1px">AM/NS<br><span style="font-size:9px;letter-spacing:3px;font-weight:800;color:#FEE2E2">INDIA</span></td>
+ <td style="padding-left:14px"><div style="font-size:16px;font-weight:900;color:#0F172A;text-transform:uppercase;letter-spacing:-.2px">SFI - Shop Floor Interaction</div><div style="font-size:11px;color:#64748B;font-weight:600;margin-top:2px">Safety Register · ${closed?'Action Closure':'Action Required'}</div></td></tr></table></td></tr>
+<tr><td bgcolor="${acc}" style="background:${acc};padding:24px 20px;color:#FFFFFF"><span style="display:inline-block;background:rgba(255,255,255,.22);padding:4px 12px;border-radius:20px;font-size:10px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase">Shop Floor Safety</span><div style="font-size:24px;font-weight:900;margin-top:10px;line-height:1.2">${closed?'SFI Closed':'Corrective Action Required'}</div><div style="font-size:12px;margin-top:6px;color:#FFFFFF;opacity:.9">Reference: <b>${esc(d.ref)}</b> &nbsp;·&nbsp; Severity: <b>${esc(d.severity)}</b></div></td></tr>
+<tr><td style="padding:16px 20px 0"><div style="padding:12px 14px;background:${closed?'#ECFDF5':'#FEF2F2'};border-left:4px solid ${acc};color:${closed?'#065F46':'#991B1B'};font-size:13px">${al}</div></td></tr>
+${msec('SFI Details',det,RED)}
+${closed?msec('Closure Details',clo,GRN):''}
+${cta}
+<tr><td align="center" style="padding:16px 20px 18px;font-size:11px;color:#94A3B8;border-top:1px solid #E2E8F0">AM/NS India · Shop Floor Interaction · The full SFI report is attached as PDF.</td></tr>
+</table></td></tr></table>`}
+function pdfHtml(d,closed){
+ const im=a=>a&&a.length?a.map(p=>`<img src="${p}" style="width:170px;height:130px;object-fit:cover;margin:0 6px 6px 0;border:1px solid #ccc">`).join(''):'No Image';
+ const rows=coreRows(d);
+ if(d.shift)rows.splice(5,0,['Shift / Duration',`${d.shift} / ${d.duration}`],['Interactions / People',`${d.noInteractions} / ${d.peopleInteracted}`],['Trade',d.trade],['Counts',`Safe Act ${d.safeAct} · Safe Cond ${d.safeCond} · Unsafe Act ${d.unsafeAct} · Unsafe Cond ${d.unsafeCond}`],['Employees Interacted',d.employeesInteracted]);
+ if(!closed&&d.closeLink)rows.push(['Closure Form Link','',`<a href="${esc(d.closeLink)}" style="color:#E31B23;font-weight:bold">Click here to Close this SFI</a>`]);
+ rows.push(['Condition Before (Photos)','',im(d.beforePhotos)]);
+ if(closed)rows.push(['Status','','<b style="color:#10B981">CLOSED</b>'],['Action Taken',d.actionTaken],['Action Taken By',d.actionTakenBy],['Closed By (Mail ID)',d.closedByEmail||'-'],['Closed On (Date)',d.closedDate],['Remark',d.remarks||'-'],['Condition After (Photos)','',im(d.afterPhotos)]);
+ return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;margin:20px;color:#1E293B"><div style="background:#0F172A;color:#fff;padding:14px;border-bottom:4px solid ${closed?'#10B981':'#E31837'}"><h2 style="margin:0">AM/NS INDIA — Shop Floor Interaction (SFI)</h2><p style="margin:4px 0 0;font-size:12px;color:#94A3B8">${esc(d.ref)} · ${closed?'CLOSED':'OPEN'}</p></div><div style="margin-top:12px">${tbl(rows)}</div></body></html>`}
+
+async function send(url,payload,btn){
+ if(url.startsWith('PASTE_')){alert('Flow URL not configured (CREATE_URL / CLOSE_URL).');return false}
+ const old=btn.innerHTML;btn.disabled=true;btn.innerHTML='<i class="fa-solid fa-spinner fa-spin mr-2"></i> Submitting…';
+ try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok)throw new Error('HTTP '+r.status);return true}
+ catch(e){console.error(e);alert('Submission failed: '+e.message+'. Check network and try again.');btn.disabled=false;btn.innerHTML=old;return false}}
+function check(ids){let bad=false;ids.forEach(id=>{const e=$(id),b=!val(id);e.classList.toggle('err',b);if(b)bad=true});if(bad){alert('Please fill all mandatory fields (highlighted in red).');}return !bad}
+const doneCard=(msg,ok=true)=>`<div class="bg-white rounded-2xl border ${ok?'border-emerald-300':'border-red-300'} p-8 text-center custom-shadow"><i class="fa-solid fa-circle-check text-5xl text-emerald-500"></i><p class="mt-4 text-sm font-bold text-slate-800">${msg}</p><button onclick="location.href=location.href.split('?')[0].split('#')[0]" class="mt-6 px-6 py-3 bg-amns-red text-white font-black rounded-xl">Submit another SFI</button></div>`;
+
+/* ================= SUBMIT FORM ================= */
+function renderForm(){
+$('app').innerHTML=`
+<div class="bg-gradient-to-r from-amns-red via-red-600 to-amns-darkred rounded-2xl p-6 text-white shadow-md mb-6">
+ <span class="bg-white/20 text-[11px] px-3 py-1 rounded-full uppercase tracking-widest font-extrabold">Shop Floor Safety</span>
+ <h2 class="text-2xl sm:text-3xl font-extrabold mt-2">Log New Shop Floor Interaction (SFI)</h2>
+ <p class="text-red-100 text-xs sm:text-sm max-w-2xl mt-1">Saved to Excel automatically. Pending items mail the responder a PDF and a closure link.</p></div>
+<div class="bg-white rounded-2xl border border-slate-200 custom-shadow p-6 sm:p-8 space-y-8">
+ <div class="space-y-4">${H('fa-location-dot','1. Location & Shift Details')}
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+   ${F('Location',S('location',['PUNE','HAZIRA'],'Select Location'))}${F('Plant / Facility',S('plant',PLANTS,'Select Plant'))}
+   ${F('Interacted On (Date)',I('date','date','',`value="${today()}"`))}${F('Shift',S('shift',SHIFTS,'Select Shift'))}</div>
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   ${F('Duration',I('duration','text','e.g. 45 Mins / 1 Hour'))}${F('SFI Auditor / Submitter Name',I('submitter','text','e.g. Rakesh Verma (Manager - Safety)'))}
+   ${F('Submitter Email ID',I('submitterEmail','email','name@company.com','autocomplete="email"'))}</div></div>
+ <div class="space-y-4">${H('fa-users','2. Interaction Scope & Observation Counts')}
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+   ${F('No. of Interactions',I('noInteractions','number','','min="1" value="1"'))}${F('No. of People Interacted With',I('peopleInteracted','number','','min="1" value="2"'))}
+   ${F('Trade (Skillset) Interacted With',S('trade',TRADES,'Select Trade'))}${F('SFI Compliance Dept.',S('dept',DEPTS,'Select Department'))}</div>
+  <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-3">
+   ${count('safeAct','Safe Act',1,'emerald')}${count('safeCond','Safe Condition',1,'blue')}${count('unsafeAct','Unsafe Act',0,'amber')}${count('unsafeCond','Unsafe Condition',1,'red')}</div>
+  ${F('Employees with Whom Interaction Was Done',I('employeesInteracted','text','e.g. Suresh Patel (Emp #4821), Amit Kumar (Emp #9102)'))}</div>
+ <div class="space-y-4">${H('fa-triangle-exclamation','3. Observation Categorization & Golden Rules')}
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">${F('SFI Category',S('category',CATS,'Select Category'))}${F('Severity Level of Observation',S('severity',SEVS,'Select Severity'))}</div>
+  ${F('Applicable Golden Rule',S('goldenRule',RULES,'Select Applicable Golden Rule'))}
+  ${F('SFI Visit Description & Finding Narrative',T('description',3,'Describe the interaction, observations made and discussion...'))}
+  ${photoBox('before','Safe/Unsafe Act/Condition Supporting Photo (Optional)')}</div>
+ <div class="space-y-4">${H('fa-list-check','4. Corrective Action & Completion Logic')}
+  ${F('Corrective Action Required to be Performed',T('requiredAction',2,'Recommended corrective action or control measure...'))}
+  <div class="bg-slate-100 p-4 rounded-xl border border-slate-200 space-y-2">
+   <label class="block text-xs sm:text-sm font-extrabold text-slate-900">Has corrective action already been completed? <span class="text-amns-red">*</span></label>
+   <label class="flex items-start cursor-pointer p-2 rounded-lg hover:bg-white"><input type="radio" name="done" value="yes" onchange="toggle()" class="mt-0.5 w-4 h-4"><span class="ml-2.5 text-xs sm:text-sm font-bold text-emerald-800">Yes; completed — I will update the action taken (Status: CLOSED)</span></label>
+   <label class="flex items-start cursor-pointer p-2 rounded-lg hover:bg-white"><input type="radio" name="done" value="no" checked onchange="toggle()" class="mt-0.5 w-4 h-4"><span class="ml-2.5 text-xs sm:text-sm font-bold text-amns-red">No; to be assigned, status updated later (Status: OPEN)</span></label></div>
+  <div id="ifNo" class="bg-red-50/60 p-4 rounded-xl border border-red-200 space-y-3">
+   <div class="text-amns-red text-xs font-extrabold uppercase"><i class="fa-solid fa-paper-plane mr-2"></i>Assignment & Task Email Notification</div>
+   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">${F('Assigned To (HOD) — select one or more',hodWidget())}${F('Target Date Of Closure',I('targetDate','date'))}</div></div>
+  <div id="ifYes" class="hidden bg-emerald-50/60 p-4 rounded-xl border border-emerald-200 space-y-3">
+   <div class="text-emerald-800 text-xs font-extrabold uppercase"><i class="fa-solid fa-circle-check mr-2"></i>Immediate Action Details</div>
+   ${F('Corrective Action Taken Description',T('actionTaken',2,'Describe the completed action...'))}
+   ${photoBox('after','Corrective Action Performed Photo (Optional)')}</div></div>
+ <div class="flex justify-end"><button id="subBtn" onclick="submitCreate()" class="w-full sm:w-auto px-8 py-3.5 bg-amns-red text-white font-black text-sm rounded-xl shadow-lg hover:bg-amns-darkred flex items-center justify-center"><i class="fa-solid fa-floppy-disk mr-2"></i> Save & Log SFI Record</button></div>
+</div>`;initHod()}
+function toggle(){const y=document.querySelector('input[name=done]:checked').value==='yes';$('ifYes').classList.toggle('hidden',!y);$('ifNo').classList.toggle('hidden',y)}
+
+const FIELDS=['location','plant','date','shift','duration','submitter','submitterEmail','noInteractions','peopleInteracted','trade','dept','safeAct','safeCond','unsafeAct','unsafeCond','employeesInteracted','category','severity','goldenRule','description','requiredAction'];
+async function submitCreate(){
+ const done=document.querySelector('input[name=done]:checked').value==='yes';
+ const need=[...FIELDS,...(done?['actionTaken']:['targetDate'])];
+ if(!check(need))return;
+ if(!done&&!$('assigneeEmail').value){$('hodBtn').classList.add('err');return alert('Please select at least one HOD in "Assigned To".')}
+ const d={};FIELDS.forEach(k=>d[k]=val(k));
+ const n=new Date(),p=x=>String(x).padStart(2,'0');
+ d.ref=`SFI-${String(n.getFullYear()).slice(2)}${p(n.getMonth()+1)}${p(n.getDate())}-${p(n.getHours())}${p(n.getMinutes())}${p(n.getSeconds())}`;
+ d.beforePhotos=photos.before;d.hasBefore=photos.before.length>0;
+ if(done){Object.assign(d,{status:'Closed',assigneeEmail:'',targetDate:d.date,actionTaken:val('actionTaken'),actionTakenBy:d.submitter,closedDate:d.date,afterPhotos:photos.after,hasAfter:photos.after.length>0,toEmail:d.submitterEmail,ccEmail:ccOf([d.submitterEmail],[])});
+  d.subject=`SFI Closed — ${d.ref}`}
+ else{d.status='Open';d.assigneeEmail=val('assigneeEmail');d.targetDate=val('targetDate');d.afterPhotos=[];d.toEmail=d.assigneeEmail;d.ccEmail=ccOf(d.assigneeEmail.split(';'),[d.submitterEmail]);
+  const keep=['submitter','submitterEmail','assigneeEmail','plant','location','dept','date','category','severity','description','goldenRule','requiredAction','targetDate','hasBefore'];
+  const c={};keep.forEach(k=>c[k]=d[k]);
+  d.closeLink=`${PAGE_URL||location.href.split('?')[0].split('#')[0]}?close=${encodeURIComponent(d.ref)}#d=${btoa(unescape(encodeURIComponent(JSON.stringify(c))))}`;
+  d.subject=`Corrective Action Required — ${d.ref} (${d.severity})`}
+ d.emailHtml=mailHtml(d,done);d.pdfHtml=pdfHtml(d,done);
+ if(await send(CREATE_URL,d,$('subBtn')))$('app').innerHTML=doneCard(`SFI <b>${esc(d.ref)}</b> saved with status <b>${d.status.toUpperCase()}</b>. Mail with PDF sent to ${esc(d.toEmail)}.`)}
+
+/* ================= CLOSURE (opened from mail link) ================= */
+function renderClose(ref,o){
+ $('subtitle').textContent='Action Closure Form';
+ const od=o?{...o,ref}:{ref,submitter:'-',submitterEmail:'-',assigneeEmail:'-',plant:'-',location:'-',dept:'-',date:'-',category:'-',severity:'Low',description:'(details not available in link)',goldenRule:'-',requiredAction:'-',targetDate:'-'};
+ window._o=od;
+ $('app').innerHTML=`<div class="bg-slate-900 rounded-2xl p-6 text-white shadow-md mb-6"><span class="bg-amns-red text-[11px] px-3 py-1 rounded-full uppercase font-extrabold">Action Tracking</span><h2 class="text-2xl font-extrabold mt-2">Close SFI ${esc(ref)}</h2><p class="text-slate-300 text-xs mt-1">Record the action taken and upload the after photo to close this finding.</p></div>
+ <div class="bg-white rounded-2xl border border-slate-200 custom-shadow overflow-hidden mb-6">${tbl(coreRows(od).filter(r=>r[0]!=='Reference ID'))}</div>
+ <div class="bg-white rounded-2xl border border-slate-200 custom-shadow p-6 space-y-4">
+  <h3 class="font-extrabold text-slate-900 border-b pb-3"><i class="fa-solid fa-circle-check text-emerald-600 mr-2"></i>Submit Closure Proof</h3>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">${F('Action Taken By (Name)',I('c_by'))}${F('Date of Action Taken',I('c_date','date','',`value="${today()}"`))}</div>
+  ${F('Closed By — Mail ID',I('c_email','email','name@amns.in'))}
+  ${F('Corrective Action Taken Description',T('c_action',3,'Describe the action taken to rectify the finding...'))}
+  <div><label class="block text-xs font-bold text-slate-700 mb-1">Remark <span class="text-slate-400 font-semibold">(optional)</span></label>${T('c_remarks',2,'Remark (optional)')}</div>
+  ${photoBox('close','Condition After Corrective Action — Photos (min 1)')}
+  <button id="subBtn" onclick="submitClose()" class="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm rounded-xl shadow-md"><i class="fa-solid fa-check-double mr-2"></i> Update & Close SFI</button></div>`}
+async function submitClose(){
+ if(!check(['c_by','c_date','c_action','c_email']))return;
+ if(!val('c_email').includes('@')){$('c_email').classList.add('err');return alert('Please enter a valid mail ID.')}
+ if(!photos.close.length)return alert('Please capture at least 1 after photo.');
+ const d={...window._o,status:'Closed',actionTaken:val('c_action'),actionTakenBy:val('c_by'),closedByEmail:val('c_email'),remarks:val('c_remarks'),closedDate:val('c_date'),afterPhotos:photos.close,hasAfter:true,beforePhotos:[],toEmail:mlist([window._o.submitterEmail,val('c_email')]).join(';'),ccEmail:ccOf([window._o.submitterEmail,val('c_email')],(window._o.assigneeEmail||'').split(';'))};
+ d.subject=`SFI Closed — ${d.ref}`;d.emailHtml=mailHtml(d,true);d.pdfHtml=pdfHtml(d,true);
+ if(await send(CLOSE_URL,d,$('subBtn')))$('app').innerHTML=doneCard(`SFI <b>${esc(d.ref)}</b> is now <b>CLOSED</b>. Closure mail with PDF is being sent.`)}
+
+/* ================= ROUTER ================= */
+(function(){
+ const ref=new URLSearchParams(location.search).get('close');
+ if(!ref){renderForm();return}
+ let o=null;try{const m=location.hash.match(/d=([^&]+)/);if(m)o=JSON.parse(decodeURIComponent(escape(atob(m[1]))))}catch(e){}
+ renderClose(ref,o)})();
+</script>
+</body>
+</html>
